@@ -30,6 +30,7 @@ from pyparsing import (
     Or,
 )
 import markdown
+from .md_img_enc import ImgBase64EncodeExtension
 
 
 def get_parsing_grammar():
@@ -50,27 +51,26 @@ def get_parsing_grammar():
         )("params")
         + RSQBRACKET
     )
-
+    print(q_format_expr)
     question_text_format = Combine(
-        OneOrMore(Word(alphanums + " *_-\\.:?!+=<>(),@\"'/;") | Word("`", exact=1))
+        OneOrMore(Word(alphanums + " *_-\\.:?!+=<>(),@\"'/;[]#<>") | Word("`", exact=1))
     )
 
     CODE_BLOCK = Combine(Literal("```") + SkipTo("```") + Literal("```"))
 
     # 3. Question Text is now a mix of plain text and code blocks
     # This explicitly consumes code blocks so the { } inside them aren't seen by the answer parser
-    question_content = (
+    question_text = (
         OneOrMore(CODE_BLOCK | question_text_format)
         .setResultsName("text")
-        .setParseAction(lambda t: " ".join(t))
-    )
+        .setParseAction(lambda t: "\n".join(t))
+    )("text")
 
     category = Group(Suppress("$CATEGORY:") + restOfLine("name"))("category")
 
     answer_start_marker = FollowedBy(
         Literal("{") + (Literal("~") | Literal("=") | Regex(r"[TF]") | Literal("}"))
     )
-    question_text = question_content("text")
 
     tf_answer = (Literal("T") | Literal("F") | Literal("TRUE") | Literal("FALSE"))(
         "tf_value"
@@ -176,15 +176,14 @@ def generate_xml_from_parsed_gift(
             q_cat = "multichoice"
             choices = pq_d["question"]["choices"]
             inferred_points = 2
-            if len(choices) == 0:
+            if len(choices) == 0 or all(c["is_correct"] == "=" for c in choices):
                 q_cat = "essay"
                 inferred_points = 3
-            elif all(c["is_correct"] == "=" for c in choices):
-                q_cat = "shortanswer"
                 if (
                     pq_d["question"]["after_text"] is not None
                     and len(pq_d["question"]["after_text"].strip()) > 0
                 ):
+                    q_cat = "shortanswer"
                     q_text += " `________` " + pq_d["question"]["after_text"]
                     inferred_points = 2
             for choice in choices:
@@ -223,7 +222,7 @@ def generate_xml_from_parsed_gift(
         q_text_el = etree.Element("name")
         q_text_name = etree.Element("text")
 
-        q_text_name.text = q_text.split("\n")[0][:50]
+        q_text_name.text = re.sub(r"[#<>]", "", q_text.split("\n")[0]).strip()[:50]
         q_text_el.append(q_text_name)
         question.append(q_text_el)
         q_text = re.sub(
@@ -231,7 +230,9 @@ def generate_xml_from_parsed_gift(
         )
         q_text_el = etree.Element("questiontext")
         if format == "markdown":
-            q_text = markdown.markdown(q_text, extensions=["extra"])
+            q_text = markdown.markdown(
+                q_text, extensions=["extra", ImgBase64EncodeExtension()]
+            )
             format = "html"
         if q_cat == "multichoice" and not single_choice:
             q_singlechoice = etree.Element("single")
