@@ -47,6 +47,7 @@ class ImgBase64Encode(Treeprocessor):
                     img_tag = etree.Element("img")
                     img_tag.set("src", img_src_base64)
                     img_tag.set("width", "512px")
+                    img_tag.set("alt", c.get("alt"))
                     c.tag = "p"
                     c.clear()  # Remove existing attributes and children
                     c.append(img_tag)  # Add the new img tag as a child

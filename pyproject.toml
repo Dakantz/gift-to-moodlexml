@@ -1,6 +1,6 @@
 [project]
 name = "gift-to-moodlexml"
-version = "0.1.2"
+version = "0.1.3"
 description = "Extended GIFT format to Moodle XML question parser"
 authors = [
     {name = "Benedikt Kantz",email = "benedikt@kantz.at"}

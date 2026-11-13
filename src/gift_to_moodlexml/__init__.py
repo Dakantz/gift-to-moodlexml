@@ -129,142 +129,156 @@ def parse_all_questions(gift_content: str):
     # Split the content into question blocks based on blank lines
     all_question_strs = gift_content.strip().split("\n\n")
 
-    all_questions = []
+    all_questions: list[tuple[dict, str]] = []
     for question_str in all_question_strs:
         parsed_question = parse_question_block(question_str)
         if parsed_question is not None:
-            all_questions.append(parsed_question)
+            all_questions.append((parsed_question, question_str))
     return all_questions
 
 
+def add_category(cat_name: str):
+    cat_q = etree.Element("question")
+    cat_q.set("type", "category")
+    cat_q_text = etree.Element("category")
+    cat_q_text_text = etree.Element("text")
+    cat_q_text_text.text = f"$course$/top/{cat_name.strip()}"
+    cat_q_text.append(cat_q_text_text)
+    cat_q.append(cat_q_text)
+    return cat_q
+
+
+def q_to_element(pq_d: dict):
+    question = etree.Element("question")
+    if "question" not in pq_d:
+        return None, None
+    format = pq_d["question"]["format"] if "format" in pq_d["question"] else "markdown"
+    if "params" in pq_d["question"] and "disable" in pq_d["question"]["params"]:
+        return None, None
+    q_cat = "essay"
+    q_text: str = pq_d["question"]["text"]
+    inferred_points = 1
+    single_choice = False
+    if "choices" in pq_d["question"]:
+        q_cat = "multichoice"
+        choices = pq_d["question"]["choices"]
+        inferred_points = 2
+        if len(choices) == 0 or all(c["is_correct"] == "=" for c in choices):
+            q_cat = "essay"
+            inferred_points = 3
+            if (
+                pq_d["question"]["after_text"] is not None
+                and len(pq_d["question"]["after_text"].strip()) > 0
+            ):
+                q_cat = "shortanswer"
+                q_text += " `________` " + pq_d["question"]["after_text"]
+                inferred_points = 2
+        for choice in choices:
+            answer = etree.Element("answer")
+            answer.set("format", format)
+            if choice["is_correct"] == "=":
+                answer.set("fraction", "100")
+                single_choice = True
+            else:
+                if "fraction" in choice and choice["fraction"] is not None:
+                    answer.set("fraction", choice["fraction"])
+                else:
+                    answer.set("fraction", "-50")
+
+            answer_text = etree.Element("text")
+            answer_text.text = choice["choice_text"].strip()
+            answer.append(answer_text)
+            question.append(answer)
+    elif "tf_value" in pq_d["question"]:
+        q_cat = "multichoice"
+        inferred_points = 1
+        mult = 1 if pq_d["question"]["tf_value"] in ["T", "TRUE"] else -1
+        single_choice = True
+        for opt, frac in (("True", 100), ("False", -100)):
+            answer = etree.Element("answer")
+            answer.set("format", format)
+            answer_text = etree.Element("text")
+            answer_text.text = opt
+            answer.set("fraction", str(frac * mult))
+            answer.append(answer_text)
+            question.append(answer)
+    else:
+        inferred_points = 3
+    question.set("type", q_cat)
+
+    q_text_el = etree.Element("name")
+    q_text_name = etree.Element("text")
+
+    q_text_name.text = re.sub(r"[#<>]", "", q_text.split("\n")[0]).strip()[:50]
+    q_text_el.append(q_text_name)
+    question.append(q_text_el)
+    q_text = re.sub(
+        r"(```(\w+)?)", lambda m: f"\n{m.group(0)}\n", q_text, flags=re.DOTALL
+    )
+    q_text_el = etree.Element("questiontext")
+    if format == "markdown":
+        q_text = markdown.markdown(
+            q_text, extensions=["extra", ImgBase64EncodeExtension()]
+        )
+        format = "html"
+    if q_cat == "multichoice" and not single_choice:
+        q_singlechoice = etree.Element("single")
+        q_singlechoice.text = "false"
+        question.append(q_singlechoice)
+    q_text_el.set("format", format)
+    q_text_text = etree.Element("text")
+    # set correct CDATA section
+    q_text_text.text = etree.CDATA(q_text)
+    q_text_el.append(q_text_text)
+    question.append(q_text_el)
+
+    quiz_points = etree.Element("defaultgrade")
+    if "points" in pq_d["question"]:
+        inferred_points = int(pq_d["question"]["points"])
+    quiz_points.text = str(inferred_points)
+
+    question.append(quiz_points)
+    tags = [f"cat={q_cat}", "points=" + str(inferred_points)]
+    q_tags = etree.Element("tags")
+    for tag in tags:
+        q_tag = etree.Element("tag")
+        q_tag_text = etree.Element("text")
+        q_tag_text.text = tag
+        q_tag.append(q_tag_text)
+        q_tags.append(q_tag)
+    question.append(q_tags)
+    use_case = etree.Element("usecase")
+    use_case.text = "0"
+    question.append(use_case)
+    return question, q_cat
+
+
 def generate_xml_from_parsed_gift(
-    parsed_questions: list[dict], output_file: str | None = "quiz.xml"
+    parsed_questions: list[tuple[dict, str]], output_file: str | None = "quiz.xml"
 ):
     quiz = etree.Element("quiz")
     last_category = None
-
-    def add_category(cat_name: str):
-        cat_q = etree.Element("question")
-        cat_q.set("type", "category")
-        cat_q_text = etree.Element("category")
-        cat_q_text_text = etree.Element("text")
-        cat_q_text_text.text = f"$course$/top/{cat_name.strip()}"
-        cat_q_text.append(cat_q_text_text)
-        cat_q.append(cat_q_text)
-        quiz.append(cat_q)
-
-    for pq in parsed_questions:
+    prev_question = None
+    for pq, q_str in parsed_questions:
         pq_d = pq.as_dict()
         if "category" in pq_d:
             last_category = pq_d["category"]["name"]
-            add_category(last_category)
+            cat_q = add_category(last_category)
+            quiz.append(cat_q)
             continue
-
-        question = etree.Element("question")
-        if "question" not in pq_d:
-            continue
-        format = (
-            pq_d["question"]["format"] if "format" in pq_d["question"] else "markdown"
-        )
-        if "params" in pq_d["question"] and "disable" in pq_d["question"]["params"]:
-            continue
-        q_cat = "essay"
-        q_text: str = pq_d["question"]["text"]
-        inferred_points = 1
-        single_choice = False
-        if "choices" in pq_d["question"]:
-            q_cat = "multichoice"
-            choices = pq_d["question"]["choices"]
-            inferred_points = 2
-            if len(choices) == 0 or all(c["is_correct"] == "=" for c in choices):
-                q_cat = "essay"
-                inferred_points = 3
-                if (
-                    pq_d["question"]["after_text"] is not None
-                    and len(pq_d["question"]["after_text"].strip()) > 0
-                ):
-                    q_cat = "shortanswer"
-                    q_text += " `________` " + pq_d["question"]["after_text"]
-                    inferred_points = 2
-            for choice in choices:
-                answer = etree.Element("answer")
-                answer.set("format", format)
-                if choice["is_correct"] == "=":
-                    answer.set("fraction", "100")
-                    single_choice = True
-                else:
-                    if "fraction" in choice and choice["fraction"] is not None:
-                        answer.set("fraction", choice["fraction"])
-                    else:
-                        answer.set("fraction", "-50")
-
-                answer_text = etree.Element("text")
-                answer_text.text = choice["choice_text"].strip()
-                answer.append(answer_text)
-                question.append(answer)
-        elif "tf_value" in pq_d["question"]:
-            q_cat = "multichoice"
-            inferred_points = 1
-            mult = 1 if pq_d["question"]["tf_value"] in ["T", "TRUE"] else -1
-            single_choice = True
-            for opt, frac in (("True", 100), ("False", -100)):
-                answer = etree.Element("answer")
-                answer.set("format", format)
-                answer_text = etree.Element("text")
-                answer_text.text = opt
-                answer.set("fraction", str(frac * mult))
-                answer.append(answer_text)
-                question.append(answer)
-        else:
-            inferred_points = 3
-        question.set("type", q_cat)
-
-        q_text_el = etree.Element("name")
-        q_text_name = etree.Element("text")
-
-        q_text_name.text = re.sub(r"[#<>]", "", q_text.split("\n")[0]).strip()[:50]
-        q_text_el.append(q_text_name)
-        question.append(q_text_el)
-        q_text = re.sub(
-            r"(```(\w+)?)", lambda m: f"\n{m.group(0)}\n", q_text, flags=re.DOTALL
-        )
-        q_text_el = etree.Element("questiontext")
-        if format == "markdown":
-            q_text = markdown.markdown(
-                q_text, extensions=["extra", ImgBase64EncodeExtension()]
+        try:
+            question, q_cat = q_to_element(pq_d)
+            if question is None:
+                continue
+        except Exception as e:
+            print(
+                f"Error processing question: {e}, question data: {pq_d}, question text: {q_str} (prev question: {prev_question})"
             )
-            format = "html"
-        if q_cat == "multichoice" and not single_choice:
-            q_singlechoice = etree.Element("single")
-            q_singlechoice.text = "false"
-            question.append(q_singlechoice)
-        q_text_el.set("format", format)
-        q_text_text = etree.Element("text")
-        # set correct CDATA section
-        q_text_text.text = etree.CDATA(q_text)
-        q_text_el.append(q_text_text)
-        question.append(q_text_el)
-
-        quiz_points = etree.Element("defaultgrade")
-        if "points" in pq_d["question"]:
-            inferred_points = int(pq_d["question"]["points"])
-        quiz_points.text = str(inferred_points)
-
-        question.append(quiz_points)
-        tags = [f"cat={q_cat}", "points=" + str(inferred_points)]
-        q_tags = etree.Element("tags")
-        for tag in tags:
-            q_tag = etree.Element("tag")
-            q_tag_text = etree.Element("text")
-            q_tag_text.text = tag
-            q_tag.append(q_tag_text)
-            q_tags.append(q_tag)
-        question.append(q_tags)
-        use_case = etree.Element("usecase")
-        use_case.text = "0"
-        question.append(use_case)
-        add_category(f"{last_category}/{q_cat}")
+            raise e
+        cat_q = add_category(f"{last_category}/{q_cat}")
+        quiz.append(cat_q)
         quiz.append(question)
+        prev_question = pq_d
     tree = etree.ElementTree(quiz)
     etree.indent(tree, space="  ", level=0)
     if output_file is not None:
@@ -280,10 +294,10 @@ def generate_xml_from_gift(gift_content: str, output_file: str | None = "quiz.xm
 def generate_xml_from_questions(
     gift_questions: list[str], output_file: str | None = "quiz.xml"
 ):
-    parsed_questions = []
+    parsed_questions: list[tuple[dict, str]] = []
     for q in gift_questions:
         parsed_q = parse_question_block(q)
         if parsed_q is not None:
-            parsed_questions.append(parsed_q)
+            parsed_questions.append((parsed_q, q))
 
     return generate_xml_from_parsed_gift(parsed_questions, output_file)
