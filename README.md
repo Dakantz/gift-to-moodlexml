@@ -45,16 +45,46 @@ $CATEGORY: OOP2/Intro
 Then you can parse it to an XML to upload to moodle:
 
 ```python
-import gift_to_moodlexml
 from pathlib import Path
-questions_files= list(Path("./").glob("*.gift"))
-all_questions = []
-for q_file in questions_files:
-    with open(q_file, "r") as file:
-        content = file.read()
-        questions = content.split("\n\n")
-        questions = [q for q in questions]
-        question = questions[0]
-        all_questions.extend(questions)
-gift_to_moodlexml.generate_xml_from_questions(all_questions, output_file="quiz_package.xml")
+import gift_to_moodlexml as g
+
+# recombine=True (default for files): blank lines inside a question are kept,
+# a new question only starts at a `[params]` line
+items = g.load_gift_files(sorted(Path("./").glob("*.gift")))
+g.to_moodle_xml(items, output_file="quiz_package.xml")
+```
+
+### Paper exams (LaTeX via pandoc)
+
+```python
+groups = g.group_by_category(items)
+sections = [g.Section("Maps", ["VA/Maps"]), g.Section("Time Series", ["VA/Time Series/Hard"], n_questions=2)]
+tex = g.render_exam(Path("exam_template.tex").read_text(), g.sample_exam(groups, sections, seed=0), exam_id=0)
+```
+
+Assumes you have a template like
+```tex
+% exam_template.tex
+% ... some document
+[[#categories]]
+\section{Category: [[name]]}
+% Total points: [[points]]
+[[#questions]]
+[[tex_text]]
+[[choice_text]]
+\par
+\emph{Max. Points: [[points]]}
+[[/questions]]
+[[/categories]]
+% ... some document
+```
+
+Code blocks are emitted with pandoc's `Shaded`/`Highlighting` macros, so the
+template must define them (e.g. copy from `pandoc -D latex`).
+
+## Development
+
+```
+uv sync
+uv run pytest
 ```

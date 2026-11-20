@@ -1,0 +1,29 @@
+
+$CATEGORY: Facts
+
+[markdown, points=4]
+The current president of Austria is {=Alexander Van der Bellen}.
+
+[markdown]
+Java supports use of `varargs` (variable arguments) for parameter passing {T}
+
+[markdown]
+What pattern does this code use?
+`Logger logger=Logger.getInstance();`
+{
+    ~ Factory
+    = Singleton
+    ~%-25% Builder
+}
+
+$CATEGORY: Open/Images
+[markdown, points=3]
+## UMAP
+Describe this projection.
+
+![umap](tests/umap-mnist.png)
+
+{}
+
+[markdown, disable]
+Disabled question {T}
